@@ -1,0 +1,185 @@
+import sqlite3
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+from datetime import datetime
+import hashlib
+
+class Database:
+    def __init__(self, db_name="pos_computer_parts.db"):
+        self.conn = sqlite3.connect(db_name)
+        self.cursor = self.conn.cursor()
+        self.create_tables()
+        self.insert_default_data()
+
+    def create_tables(self):
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                full_name TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('Admin','Staff','Customer','Student')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS products (
+                product_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_code TEXT UNIQUE NOT NULL,
+                product_name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                brand TEXT NOT NULL,
+                price REAL NOT NULL,
+                stock_quantity INTEGER NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transactions (
+                transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_code TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                total_amount REAL NOT NULL,
+                payment_method TEXT NOT NULL,
+                amount_paid REAL NOT NULL,
+                change_amount REAL NOT NULL,
+                transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transaction_items (
+                item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                quantity INTEGER NOT NULL,
+                unit_price REAL NOT NULL,
+                subtotal REAL NOT NULL,
+                FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id),
+                FOREIGN KEY (product_id) REFERENCES products(product_id)
+            )
+        ''')
+
+        self.conn.commit()
+
+    def hash_password(self, password):
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def insert_default_data(self):
+        users = [
+            ('admin', 'admin123', 'System Administrator', 'Admin'),
+            ('staff', 'staff123', 'Default Staff', 'Staff'),
+            ('customer', 'customer123', 'Default Customer', 'Customer'),
+            ('student', 'student123', 'Default Student', 'Student')
+        ]
+
+        for u, p, f, r in users:
+            self.cursor.execute("SELECT 1 FROM users WHERE username=?", (u,))
+            if not self.cursor.fetchone():
+                self.cursor.execute(
+                    "INSERT INTO users (username, password, full_name, role) VALUES (?, ?, ?, ?)",
+                    (u, self.hash_password(p), f, r)
+                )
+
+        self.conn.commit()
+
+        self.cursor.execute("SELECT COUNT(*) FROM products")
+        if self.cursor.fetchone()[0] == 0:
+            products = [
+                ('CPU001', 'Intel Core i9-13900K', 'Processor', 'Intel', 28999, 15, '13th Gen Intel'),
+                ('CPU002', 'AMD Ryzen 9 7950X', 'Processor', 'AMD', 32999, 12, 'High performance CPU'),
+                ('GPU001', 'NVIDIA RTX 4090', 'Graphics Card', 'NVIDIA', 89999, 8, 'High-end GPU'),
+                ('GPU002', 'AMD RX 7900 XTX', 'Graphics Card', 'AMD', 54999, 10, 'Gaming GPU'),
+                ('RAM001', 'Corsair Vengeance 32GB', 'Memory', 'Corsair', 8999, 25, 'DDR5 RAM'),
+                ('MB001', 'ASUS ROG Z790', 'Motherboard', 'ASUS', 24999, 10, 'Gaming motherboard'),
+                ('SSD001', 'Samsung 990 PRO 2TB', 'Storage', 'Samsung', 12999, 20, 'NVMe SSD'),
+                ('PSU001', 'Corsair RM1000x', 'Power Supply', 'Corsair', 9999, 15, '1000W PSU'),
+                ('CASE001', 'NZXT H510 Elite', 'Case', 'NZXT', 7999, 12, 'PC Case'),
+                ('COOL001', 'Corsair H150i', 'Cooling', 'Corsair', 8999, 18, 'Liquid Cooler')
+            ]
+
+            self.cursor.executemany(
+                "INSERT INTO products (product_code, product_name, category, brand, price, stock_quantity, description) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                products
+            )
+
+        self.conn.commit()
+
+class POSSystem:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Computer Parts POS System")
+        self.root.geometry("1200x700")
+        self.root.resizable(False, False)
+
+        self.db = Database()
+        self.current_user = None
+        self.cart = []
+
+        self.show_login()
+
+    def show_login(self):
+        self.clear_window()
+
+        f = tk.Frame(self.root, bg='#2c3e50')
+        f.place(relx=0.5, rely=0.5, anchor='center')
+
+        tk.Label(f, text="Computer Parts POS System",
+                 font=('Arial', 24, 'bold'), bg='#2c3e50', fg='white').pack(pady=20)
+
+        tk.Label(f, text="Username", bg='#2c3e50', fg='white').pack()
+        self.username_entry = tk.Entry(f, width=30)
+        self.username_entry.pack()
+
+        tk.Label(f, text="Password", bg='#2c3e50', fg='white').pack()
+        self.password_entry = tk.Entry(f, width=30, show='*')
+        self.password_entry.pack()
+
+        tk.Button(f, text="Login", bg='#27ae60', fg='white',
+                  width=20, command=self.login).pack(pady=20)
+
+        tk.Label(
+            f,
+            text="Admin: admin / admin123\nStaff: staff / staff123\nCustomer: customer / customer123\nStudent: student / student123",
+            bg='#2c3e50', fg='#bdc3c7'
+        ).pack()
+
+    def login(self):
+        u = self.username_entry.get()
+        p = self.password_entry.get()
+
+        h = self.db.hash_password(p)
+        self.db.cursor.execute(
+            "SELECT user_id, username, full_name, role FROM users WHERE username=? AND password=?",
+            (u, h)
+        )
+        r = self.db.cursor.fetchone()
+
+        if r:
+            self.current_user = {
+                'user_id': r[0],
+                'username': r[1],
+                'full_name': r[2],
+                'role': r[3]
+            }
+            self.show_main_window()
+        else:
+            messagebox.showerror("Error", "Invalid username or password")
+
+    def show_main_window(self):
+        self.clear_window()
+        tk.Label(self.root, text=f"Welcome {self.current_user['full_name']}",
+                 font=('Arial', 20, 'bold')).pack(pady=50)
+
+    def clear_window(self):
+        for w in self.root.winfo_children():
+            w.destroy()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = POSSystem(root)
+    root.mainloop()
